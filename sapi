@@ -1,0 +1,108 @@
+// Define pin for the piezoelectric sensor
+const int piezoPin = 34;  // Analog input pin for the piezo sensor
+const int sampleWindow = 5000;  // Sample window in milliseconds (5 seconds)
+unsigned long startMillis;      // Start of sample window
+unsigned int breathCount = 0;   // To count breaths
+float threshold;                // Threshold for detecting breath (dynamic based on calibration)
+const int calibrationTime = 10000; // Calibration duration (10 seconds)
+
+// Variables for respiratory rate calculation
+unsigned long lastBreathTime = 0;
+float breathIntervalSum = 0;
+int breathSamples = 0;
+
+// Filter settings
+const int filterWindow = 10;    // Moving average filter window size
+float voltageReadings[filterWindow];  // Array to store recent readings
+int readingIndex = 0;
+float voltageSum = 0;
+
+void setup() {
+  Serial.begin(115200);
+  startMillis = millis();  // Initialize start time
+  
+  // Calibrate sensor
+  Serial.println("Calibrating sensor...");
+  threshold = calibrateSensor();
+  Serial.print("Calibration complete. Threshold set to: ");
+  Serial.println(threshold);
+}
+
+void loop() {
+  // Read sensor value and apply filter
+  float voltage = getFilteredVoltage();
+
+  // Display the filtered sensor value for debugging
+  delay(10);
+  Serial.println(voltage);
+
+  // Detect breath based on dynamic threshold
+  if (voltage > threshold) {
+    unsigned long currentTime = millis();
+    
+    // Ensure time since last breath is long enough to avoid false positives
+    if (currentTime - lastBreathTime > 800) {  // Adjust based on testing data
+      breathCount++;
+      Serial.println("Breath detected");
+
+      // Calculate breath interval and accumulate for average
+      if (lastBreathTime != 0) {
+        unsigned long breathInterval = currentTime - lastBreathTime;
+        breathIntervalSum += breathInterval;
+        breathSamples++;
+      }
+
+      lastBreathTime = currentTime;
+    }
+  }
+
+  // Every 60 seconds, calculate respiratory rate
+  if (millis() - startMillis >= 60000) {
+    float avgBreathInterval = (breathSamples > 0) ? (breathIntervalSum / breathSamples) : 0;
+    float respRate = (avgBreathInterval > 0) ? (60000 / avgBreathInterval) : 0;
+
+    // Display respiratory rate
+    Serial.print("Respiratory Rate: ");
+    Serial.print(respRate);
+    Serial.println(" breaths per minute");
+
+    // Reset variables for the next interval
+    startMillis = millis();
+    breathCount = 0;
+    breathIntervalSum = 0;
+    breathSamples = 0;
+  }
+}
+
+// Function to calibrate the sensor by determining an appropriate threshold
+float calibrateSensor() {
+  float totalVoltage = 0;
+  int samples = 0;
+  unsigned long calibrationStart = millis();
+
+  while (millis() - calibrationStart < calibrationTime) {
+    int sensorValue = analogRead(piezoPin);
+    float voltage = sensorValue * (3.3 / 4095.0);  // Convert to voltage
+    totalVoltage += voltage;
+    samples++;
+    delay(10);
+  }
+
+  float averageVoltage = totalVoltage / samples;
+  return averageVoltage * 1.5;  // Set threshold to 1.5 times the average to detect significant breaths
+}
+
+// Function to get filtered voltage using moving average filter
+float getFilteredVoltage() {
+  int sensorValue = analogRead(piezoPin);
+  float voltage = sensorValue * (3.3 / 4095.0);  // Convert to voltage
+
+  // Update filter window
+  voltageSum -= voltageReadings[readingIndex];   // Remove the oldest value
+  voltageReadings[readingIndex] = voltage;       // Add the new value
+  voltageSum += voltage;                         // Add the new value to the sum
+  readingIndex = (readingIndex + 1) % filterWindow;  // Update index
+
+  // Return the filtered voltage (moving average)
+  return voltageSum / filterWindow;
+}
